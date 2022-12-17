@@ -1,5 +1,7 @@
-﻿CREATE DATABASE BankDb;
+﻿CREATE DATABASE BankDb
+COLLATE Cyrillic_General_CI_AS;
 GO
+
 USE BankDb;
 
 CREATE TABLE dbo.Banks
@@ -52,19 +54,19 @@ CREATE TABLE CreditCards
 
 INSERT Cities
 VALUES
-(N'Минск'),
-(N'Гомель'),
-(N'Брест'),
-(N'Могилёв'),
-(N'Гродно')
+('Минск'),
+('Гомель'),
+('Брест'),
+('Могилёв'),
+('Гродно')
 
 INSERT Banks
 VALUES
-(N'Альфа Банк'),
-(N'Беларусбанк'),
-(N'Приорбанк'),
-(N'БПС-Сбербанк'),
-(N'Белагропромбанк')
+('Альфа Банк'),
+('Беларусбанк'),
+('Приорбанк'),
+('БПС-Сбербанк'),
+('Белагропромбанк')
 
 INSERT Branches
 VALUES
@@ -76,17 +78,17 @@ VALUES
 
 INSERT SocialStatuses 
 VALUES
-(N'Трудоспособный'),
-(N'Пенсионер'),
-(N'Инвалид')
+('Трудоспособный'),
+('Пенсионер'),
+('Инвалид')
 
 INSERT Clients
 VALUES
-(N'Александр', 1),
-(N'Андрей', 2),
-(N'Алексей', 3),
-(N'Марина', 1),
-(N'Екатерина', 1)
+('Александр', 1),
+('Андрей', 2),
+('Алексей', 3),
+('Марина', 1),
+('Екатерина', 1)
 
 INSERT Accounts
 VALUES
@@ -103,3 +105,84 @@ VALUES
 (DEFAULT, 3),
 (DEFAULT, 3),
 (DEFAULT, 4)
+
+-- Задание 2
+SELECT DISTINCT Banks.Title
+FROM Banks
+	JOIN Branches ON Banks.Id = Branches.BankId
+	JOIN Cities ON Cities.Id = Branches.CityId
+WHERE Cities.Title = 'Минск'
+
+-- Задание 3
+SELECT Clients.FullName, CreditCards.Balance, Banks.Title
+FROM CreditCards
+	JOIN Accounts ON Accounts.Id = CreditCards.Id
+	JOIN Clients ON Clients.Id = Accounts.ClientId
+	JOIN Banks ON Banks.Id = Accounts.BankId
+
+-- Задание 4
+SELECT Accounts.Id, Accounts.Balance, SUM(CreditCards.Balance) AS CardsSum
+FROM CreditCards
+	RIGHT JOIN Accounts ON Accounts.Id = CreditCards.AccountId
+GROUP BY Accounts.Id, Accounts.Balance
+HAVING Accounts.Balance != SUM(CreditCards.Balance)
+
+-- Задание 5
+SELECT SocialStatuses.Title, COUNT(CreditCards.AccountId) AS CardsCount
+FROM CreditCards
+	JOIN Accounts ON Accounts.Id = CreditCards.AccountId
+	JOIN Clients ON Clients.Id = Accounts.ClientId
+	RIGHT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
+GROUP BY SocialStatuses.Title
+
+-- Задание 6
+SELECT Accounts.Id, Accounts.Balance, Clients.FullName, SocialStatuses.Title
+FROM Accounts
+	LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
+	LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
+Where SocialStatuses.Id = 1
+
+GO
+CREATE PROCEDURE AddMoneyToAccounts
+	@SocialStatusId INT
+AS
+BEGIN
+	DECLARE @AccountsCount INT
+	SELECT @AccountsCount = COUNT(Accounts.Id)
+							FROM Accounts
+								LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
+								LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
+							WHERE SocialStatusId = @SocialStatusId
+	IF (@AccountsCount = 0)
+		PRINT CONCAT('No accounts with SocialStatusId = ', @SocialStatusId);
+	ELSE IF EXISTS (SELECT * FROM SocialStatuses WHERE Id = @SocialStatusId)
+		BEGIN	
+			UPDATE Accounts
+			SET Balance = Balance + 10
+			FROM
+				(SELECT Accounts.Id 
+				 FROM Accounts
+					 LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
+					 LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
+				 WHERE SocialStatusId = @SocialStatusId) AS StatusAccount
+			WHERE Accounts.Id = StatusAccount.Id
+		END
+	ELSE
+		PRINT CONCAT('Social status with id = ', @SocialStatusId, ' does not exist.');
+END;
+GO
+
+EXEC AddMoneyToAccounts 1
+
+SELECT Accounts.Id, Accounts.Balance, Clients.FullName, SocialStatuses.Title
+FROM Accounts
+	LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
+	LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
+Where SocialStatuses.Id = 1
+
+-- Задание 7
+SELECT Clients.FullName, COALESCE(SUM(Accounts.Balance), 0) - COALESCE(SUM(CreditCards.Balance), 0) AS Available
+FROM Clients
+	LEFT JOIN Accounts ON Accounts.ClientId = Clients.Id
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+GROUP BY Clients.FullName
