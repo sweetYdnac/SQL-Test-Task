@@ -121,13 +121,15 @@ FROM CreditCards
 	JOIN Banks ON Banks.Id = Accounts.BankId
 
 -- Задание 4
-SELECT Accounts.Id, Accounts.Balance, SUM(CreditCards.Balance) AS CardsSum
+SELECT Accounts.Id, Accounts.Balance AS AccountBalance, SUM(CreditCards.Balance) AS CardsSum
 FROM CreditCards
 	RIGHT JOIN Accounts ON Accounts.Id = CreditCards.AccountId
 GROUP BY Accounts.Id, Accounts.Balance
 HAVING Accounts.Balance != SUM(CreditCards.Balance)
 
 -- Задание 5
+
+-- GROUP BY
 SELECT SocialStatuses.Title, COUNT(CreditCards.AccountId) AS CardsCount
 FROM CreditCards
 	JOIN Accounts ON Accounts.Id = CreditCards.AccountId
@@ -135,12 +137,20 @@ FROM CreditCards
 	RIGHT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
 GROUP BY SocialStatuses.Title
 
+-- Подзапрос
+SELECT DISTINCT SocialStatuses.Title,
+	   COUNT(CreditCards.AccountId) OVER (PARTITION BY SocialStatuses.Title)
+FROM CreditCards
+	JOIN Accounts ON Accounts.Id = CreditCards.AccountId
+	JOIN Clients ON Clients.Id = Accounts.ClientId
+	RIGHT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
+
 -- Задание 6
 SELECT Accounts.Id, Accounts.Balance, Clients.FullName, SocialStatuses.Title
 FROM Accounts
 	LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
 	LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
-Where SocialStatuses.Id = 1
+WHERE SocialStatuses.Id = 1
 
 GO
 CREATE PROCEDURE AddMoneyToAccounts
@@ -149,10 +159,11 @@ AS
 BEGIN
 	DECLARE @AccountsCount INT
 	SELECT @AccountsCount = COUNT(Accounts.Id)
-							FROM Accounts
-								LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
-								LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
-							WHERE SocialStatusId = @SocialStatusId
+	FROM Accounts
+		LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
+		LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
+	WHERE SocialStatusId = @SocialStatusId
+
 	IF (@AccountsCount = 0)
 		PRINT CONCAT('No accounts with SocialStatusId = ', @SocialStatusId);
 	ELSE IF EXISTS (SELECT * FROM SocialStatuses WHERE Id = @SocialStatusId)
@@ -178,11 +189,166 @@ SELECT Accounts.Id, Accounts.Balance, Clients.FullName, SocialStatuses.Title
 FROM Accounts
 	LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
 	LEFT JOIN SocialStatuses ON SocialStatuses.Id = Clients.SocialStatusId
-Where SocialStatuses.Id = 1
+WHERE SocialStatuses.Id = 1
 
 -- Задание 7
-SELECT Clients.FullName, COALESCE(SUM(Accounts.Balance), 0) - COALESCE(SUM(CreditCards.Balance), 0) AS Available
+SELECT Clients.FullName, COALESCE(SUM(DISTINCT Accounts.Balance), 0) - COALESCE(SUM(CreditCards.Balance), 0) AS Available
 FROM Clients
 	LEFT JOIN Accounts ON Accounts.ClientId = Clients.Id
 	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
 GROUP BY Clients.FullName
+
+-- Задание 8
+SELECT Accounts.Id, Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+	LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
+GROUP BY Accounts.Id, Accounts.Balance
+
+GO
+CREATE PROCEDURE TransferToCard
+	@CardId INT,
+	@Amount MONEY
+AS
+BEGIN
+	IF NOT EXISTS (SELECT * FROM CreditCards WHERE Id = @CardId)
+		PRINT CONCAT('Credit card with id = ', @CardId, ' does not exist.');
+
+	DECLARE @Available MONEY
+	SELECT @Available = Accounts.Balance - COALESCE(SUM(CreditCards.Balance), 0)
+	FROM Accounts
+		LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+	GROUP BY Accounts.Id, Accounts.Balance
+	HAVING Accounts.Id = (SELECT Accounts.Id
+						  FROM Accounts
+							  JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+						  WHERE CreditCards.Id = @CardId)
+	IF @Available = 0
+		PRINT 'No funds available'
+	ELSE IF @Amount > @Available
+		PRINT CONCAT('There are no funds in the account in the amount = ', @Amount);
+	ELSE
+		BEGIN
+			BEGIN TRY
+				BEGIN TRANSACTION
+					UPDATE CreditCards
+					SET Balance = Balance + @Amount
+					WHERE CreditCards.Id = @CardId
+				COMMIT TRANSACTION
+			END TRY
+
+			BEGIN CATCH
+				ROLLBACK TRANSACTION
+				SELECT ERROR_NUMBER(), ERROR_MESSAGE()
+				RETURN
+			END CATCH
+		END
+END
+GO
+
+EXEC TransferToCard 1, 10
+
+SELECT Accounts.Id, Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+	LEFT JOIN Clients ON Clients.Id = Accounts.ClientId
+GROUP BY Accounts.Id, Accounts.Balance
+
+-- Задание 9
+GO
+CREATE TRIGGER Accounts_UPDATE
+ON Accounts
+FOR UPDATE
+AS BEGIN
+	DECLARE @AccountId INT
+	SELECT @AccountId = inserted.Id
+	FROM inserted
+
+	DECLARE @newBalance MONEY
+	SELECT @newBalance = inserted.Balance
+	FROM inserted
+
+	DECLARE @CardsBalance MONEY
+	SELECT @CardsBalance = COALESCE(SUM(CreditCards.Balance), 0)
+	FROM CreditCards
+	Where @AccountId = CreditCards.AccountId
+
+	IF @newBalance < @CardsBalance
+		BEGIN
+			PRINT 'Account balance cannot be less than cards balance'
+			ROLLBACK TRANSACTION
+		END
+END
+
+GO
+CREATE TRIGGER CreditCards_INSERT_UPDATE
+ON CreditCards
+FOR INSERT, UPDATE
+AS BEGIN
+	DECLARE @AccountId INT
+	SELECT @AccountId = inserted.AccountId
+	FROM inserted
+
+	DECLARE @AccountBalance MONEY
+	SELECT @AccountBalance = Accounts.Balance
+	FROM Accounts
+	WHERE (Accounts.Id = @AccountId)
+
+	DECLARE @newCardsSum MONEY
+	SELECT @newCardsSum = SUM(CreditCards.Balance)
+	FROM CreditCards
+	WHERE (CreditCards.AccountId = @AccountId)
+
+	IF @newCardsSum > @AccountBalance
+		BEGIN
+			PRINT 'Account balance cannot be less than cards balance'
+			ROLLBACK TRANSACTION
+		END
+END
+
+
+ Тесты триггеров
+
+SELECT Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+GROUP BY Accounts.Id, Accounts.Balance
+
+UPDATE Accounts
+Set Balance = 30
+Where Id = 2;
+
+SELECT Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+GROUP BY Accounts.Id, Accounts.Balance
+
+
+SELECT Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+GROUP BY Accounts.Id, Accounts.Balance
+
+UPDATE CreditCards
+Set Balance = 20
+Where Id = 2;
+
+SELECT Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+GROUP BY Accounts.Id, Accounts.Balance
+
+
+SELECT Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+GROUP BY Accounts.Id, Accounts.Balance
+
+INSERT CreditCards
+VALUES
+(10, 2)
+
+SELECT Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
+FROM Accounts
+	LEFT JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
+GROUP BY Accounts.Id, Accounts.Balance
