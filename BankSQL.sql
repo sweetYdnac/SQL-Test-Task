@@ -165,7 +165,11 @@ BEGIN
 	WHERE SocialStatusId = @SocialStatusId
 
 	IF (@AccountsCount = 0)
-		PRINT CONCAT('No accounts with SocialStatusId = ', @SocialStatusId);
+		BEGIN
+			DECLARE @Message varchar(100);
+			SET @Message = CONCAT('No accounts with SocialStatusId = ', @SocialStatusId);
+			THROW 50001, @Message, 1;
+		END
 	ELSE IF EXISTS (SELECT * FROM SocialStatuses WHERE Id = @SocialStatusId)
 		BEGIN	
 			UPDATE Accounts
@@ -179,7 +183,10 @@ BEGIN
 			WHERE Accounts.Id = StatusAccount.Id
 		END
 	ELSE
-		PRINT CONCAT('Social status with id = ', @SocialStatusId, ' does not exist.');
+		BEGIN
+			SET @Message = CONCAT('Social status with id = ', @SocialStatusId, ' does not exist.');
+			THROW 50001, @Message, 1;
+		END
 END;
 GO
 
@@ -212,7 +219,11 @@ CREATE PROCEDURE TransferToCard
 AS
 BEGIN
 	IF NOT EXISTS (SELECT * FROM CreditCards WHERE Id = @CardId)
-		PRINT CONCAT('Credit card with id = ', @CardId, ' does not exist.');
+		BEGIN
+			DECLARE @Message NVARCHAR(100);
+			SET @Message = CONCAT('Credit card with id = ', @CardId, ' does not exist.');
+			THROW 50001, @Message, 1;
+		END
 
 	DECLARE @Available MONEY
 	SELECT @Available = Accounts.Balance - COALESCE(SUM(CreditCards.Balance), 0)
@@ -224,9 +235,12 @@ BEGIN
 							  JOIN CreditCards ON CreditCards.AccountId = Accounts.Id
 						  WHERE CreditCards.Id = @CardId)
 	IF @Available = 0
-		PRINT 'No funds available'
+		THROW 50001, 'No funds available', 1;
 	ELSE IF @Amount > @Available
-		PRINT CONCAT('There are no funds in the account in the amount = ', @Amount);
+		BEGIN
+			SET @Message = CONCAT('There are no funds in the account in the amount = ', @Amount);
+			THROW 50001, @Message, 1;
+		END
 	ELSE
 		BEGIN
 			BEGIN TRY
@@ -307,7 +321,7 @@ AS BEGIN
 END
 
 
- Тесты триггеров
+-- Тесты триггеров
 
 SELECT Accounts.Balance AS AccountBalance, COALESCE(SUM(CreditCards.Balance), 0) AS CardsBalance
 FROM Accounts
